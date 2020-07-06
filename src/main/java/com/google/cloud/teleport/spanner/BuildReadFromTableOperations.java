@@ -19,12 +19,17 @@ package com.google.cloud.teleport.spanner;
 import com.google.cloud.spanner.PartitionOptions;
 import com.google.cloud.teleport.spanner.ddl.Ddl;
 import com.google.cloud.teleport.spanner.ddl.Table;
-import java.util.stream.Collectors;
+import com.google.common.base.Splitter;
+import com.google.common.collect.Lists;
 import org.apache.beam.sdk.io.gcp.spanner.ReadOperation;
+import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PCollection;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 /** Given a Cloud Spanner {@link Ddl} generates a "read all" operation per table. */
 class BuildReadFromTableOperations
@@ -33,8 +38,17 @@ class BuildReadFromTableOperations
   // The number of read partitions have to be capped so that in case the Partition token is large
   // (which can happen with a table with a lot of columns), the PartitionResponse size is bounded.
   private static final int MAX_PARTITIONS = 1000;
+  private ValueProvider<String> targetTables;
 
-  @Override
+  public BuildReadFromTableOperations(ValueProvider<String> targetTables) {
+    this.targetTables = targetTables;
+  }
+
+    public BuildReadFromTableOperations() {
+
+    }
+
+    @Override
   public PCollection<ReadOperation> expand(PCollection<Ddl> ddl) {
     return ddl.apply(
         "Read from table operations",
@@ -44,7 +58,11 @@ class BuildReadFromTableOperations
               @ProcessElement
               public void processElement(ProcessContext c) {
                 Ddl ddl = c.element();
+                List<String> targetTableList = Lists.newArrayList(Splitter.on(",").split(targetTables.get()));
                 for (Table table : ddl.allTables()) {
+                  if (targetTables != null && !targetTableList.contains(table.name())) {
+                      continue;
+                  }
                   String columnsListAsString =
                       table.columns().stream()
                           .map(x -> "t.`" + x.name() + "`")

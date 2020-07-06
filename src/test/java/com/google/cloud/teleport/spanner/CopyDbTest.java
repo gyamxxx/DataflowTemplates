@@ -16,10 +16,6 @@
 
 package com.google.cloud.teleport.spanner;
 
-import static org.hamcrest.text.IsEqualIgnoringWhiteSpace.equalToIgnoringWhiteSpace;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
-
 import com.google.cloud.spanner.DatabaseClient;
 import com.google.cloud.spanner.ReadOnlyTransaction;
 import com.google.cloud.spanner.Type;
@@ -28,8 +24,6 @@ import com.google.cloud.teleport.spanner.ddl.InformationSchemaScanner;
 import com.google.cloud.teleport.spanner.ddl.RandomDdlGenerator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import java.io.IOException;
-import java.util.Collections;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerConfig;
 import org.apache.beam.sdk.options.ValueProvider;
@@ -42,6 +36,13 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TemporaryFolder;
+
+import java.io.IOException;
+import java.util.Collections;
+
+import static org.hamcrest.text.IsEqualIgnoringWhiteSpace.equalToIgnoringWhiteSpace;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
 
 /**
  * An end to end test that exports and imports a database and verifies that the content is identical
@@ -263,11 +264,13 @@ public class CopyDbTest {
         .of(tmpDirPath);
     ValueProvider.StaticValueProvider<String> jobId = ValueProvider.StaticValueProvider
         .of("jobid");
+    ValueProvider.StaticValueProvider<String> targetTable = ValueProvider.StaticValueProvider
+            .of("targetTable");
     ValueProvider.StaticValueProvider<String> source = ValueProvider.StaticValueProvider
         .of(tmpDirPath + "/jobid");
 
     SpannerConfig sourceConfig = spannerServer.getSpannerConfig(sourceDb);
-    exportPipeline.apply("Export", new ExportTransform(sourceConfig, destination, jobId));
+    exportPipeline.apply("Export", new ExportTransform(sourceConfig, destination, jobId, targetTable));
     PipelineResult exportResult = exportPipeline.run();
     exportResult.waitUntilFinish();
 

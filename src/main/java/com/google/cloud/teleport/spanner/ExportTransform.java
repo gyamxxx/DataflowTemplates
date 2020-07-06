@@ -27,22 +27,6 @@ import com.google.common.base.Supplier;
 import com.google.common.collect.Iterables;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.util.JsonFormat;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.Serializable;
-import java.nio.channels.Channels;
-import java.nio.channels.WritableByteChannel;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.file.DataFileWriter;
@@ -54,46 +38,29 @@ import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.extensions.gcp.options.GcsOptions;
 import org.apache.beam.sdk.extensions.gcp.util.gcsfs.GcsPath;
-import org.apache.beam.sdk.io.AvroIO;
-import org.apache.beam.sdk.io.DefaultFilenamePolicy;
-import org.apache.beam.sdk.io.DynamicAvroDestinations;
-import org.apache.beam.sdk.io.FileBasedSink;
-import org.apache.beam.sdk.io.FileIO;
-import org.apache.beam.sdk.io.FileSystems;
-import org.apache.beam.sdk.io.TextIO;
-import org.apache.beam.sdk.io.WriteFilesResult;
+import org.apache.beam.sdk.io.*;
 import org.apache.beam.sdk.io.fs.ResolveOptions;
 import org.apache.beam.sdk.io.fs.ResourceId;
-import org.apache.beam.sdk.io.gcp.spanner.ExposedSpannerAccessor;
-import org.apache.beam.sdk.io.gcp.spanner.LocalSpannerIO;
-import org.apache.beam.sdk.io.gcp.spanner.ReadOperation;
-import org.apache.beam.sdk.io.gcp.spanner.SpannerConfig;
-import org.apache.beam.sdk.io.gcp.spanner.Transaction;
+import org.apache.beam.sdk.io.gcp.spanner.*;
 import org.apache.beam.sdk.options.ValueProvider;
-import org.apache.beam.sdk.transforms.Combine;
+import org.apache.beam.sdk.transforms.*;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
-import org.apache.beam.sdk.transforms.Contextful;
-import org.apache.beam.sdk.transforms.Create;
-import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.Flatten;
-import org.apache.beam.sdk.transforms.GroupByKey;
-import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.transforms.Requirements;
-import org.apache.beam.sdk.transforms.SerializableFunction;
-import org.apache.beam.sdk.transforms.SerializableFunctions;
-import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.join.CoGbkResult;
 import org.apache.beam.sdk.transforms.join.CoGroupByKey;
 import org.apache.beam.sdk.transforms.join.KeyedPCollectionTuple;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PBegin;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PCollectionList;
-import org.apache.beam.sdk.values.PCollectionView;
-import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.sdk.values.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.Serializable;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
 
 /**
  * This pipeline exports the complete contents of a Cloud Spanner database to GCS. Each table is
@@ -121,24 +88,31 @@ public class ExportTransform extends PTransform<PBegin, WriteFilesResult<String>
   private final ValueProvider<String> outputDir;
   private final ValueProvider<String> testJobId;
   private final ValueProvider<String> snapshotTime;
+  private final ValueProvider<String> targetTables;
 
   public ExportTransform(
       SpannerConfig spannerConfig,
       ValueProvider<String> outputDir,
-      ValueProvider<String> testJobId) {
+      ValueProvider<String> testJobId,
+      ValueProvider<String> targetTables
+      ) {
     this(spannerConfig, outputDir, testJobId,
-         /* snapshotTime= */ ValueProvider.StaticValueProvider.of(""));
+         /* snapshotTime= */ ValueProvider.StaticValueProvider.of(""),
+            targetTables);
   }
 
   public ExportTransform(
       SpannerConfig spannerConfig,
       ValueProvider<String> outputDir,
       ValueProvider<String> testJobId,
-      ValueProvider<String> snapshotTime) {
+      ValueProvider<String> snapshotTime,
+      ValueProvider<String> targetTables
+      ) {
     this.spannerConfig = spannerConfig;
     this.outputDir = outputDir;
     this.testJobId = testJobId;
     this.snapshotTime = snapshotTime;
+    this.targetTables = targetTables;
   }
 
   /**
@@ -165,11 +139,11 @@ public class ExportTransform extends PTransform<PBegin, WriteFilesResult<String>
     PCollection<Ddl> ddl =
         p.apply("Read Information Schema", new ReadInformationSchema(spannerConfig, tx));
     PCollection<ReadOperation> tables =
-        ddl.apply("Build table read operations", new BuildReadFromTableOperations());
+        ddl.apply("Build table read operations", new BuildReadFromTableOperations(targetTables));
 
     PCollection<KV<String, Void>> allTableNames =
         ddl.apply(
-            "List all table names",
+            "List table names",
             ParDo.of(
                 new DoFn<Ddl, KV<String, Void>>() {
 
@@ -274,8 +248,8 @@ public class ExportTransform extends PTransform<PBegin, WriteFilesResult<String>
                     CoGbkResult coGbkResult = kv.getValue();
                     Iterable<String> only = coGbkResult.getOnly(nonEmptyTables, null);
                     if (only == null) {
-                      LOG.info("Exporting empty table " + table);
-                      c.output(KV.of(table, Collections.singleton(table + ".avro-00000-of-00001")));
+                      LOG.info("ignore empty table " + table);
+                      //c.output(KV.of(table, Collections.singleton(table + ".avro-00000-of-00001")));
                     }
                   }
                 }));

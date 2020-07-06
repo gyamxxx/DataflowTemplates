@@ -20,17 +20,18 @@ import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerConfig;
-import org.apache.beam.sdk.options.Default;
-import org.apache.beam.sdk.options.Description;
-import org.apache.beam.sdk.options.PipelineOptions;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.options.ValueProvider;
+import org.apache.beam.sdk.options.*;
 
 /** Dataflow template that exports a Cloud Spanner database to Avro files in GCS. */
 public class ExportPipeline {
 
   /** Options for Export pipeline. */
   public interface ExportPipelineOptions extends PipelineOptions {
+    @Description("Table for Cloud Spanner")
+    ValueProvider<String> getTargetTables();
+
+    void setTargetTables(ValueProvider<String> value);
+
     @Description("Instance ID for Cloud Spanner")
     ValueProvider<String> getInstanceId();
 
@@ -103,7 +104,7 @@ public class ExportPipeline {
         .apply(
             "Run Export",
             new ExportTransform(spannerConfig, options.getOutputDir(), options.getTestJobId(),
-                                options.getSnapshotTime()));
+                                options.getSnapshotTime(), options.getTargetTables()));
     PipelineResult result = p.run();
     if (options.getWaitUntilFinish() &&
         /* Only if template location is null, there is a dataflow job to wait for. Else it's
